@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Demo: cubo con escala por profundidad (Depth Anything V2)</title>
+<title>Demo: objeto con escala por profundidad (Depth Anything V2)</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,13 +12,18 @@
       <canvas id="c"></canvas>
     </div>
 
-    <div id="hud" class="panel">click / arrastra para colocar el cubo</div>
+    <div id="hud" class="panel">click / arrastra para colocar el objeto</div>
 
     <div id="controls" class="panel">
+      <div id="modeSwitch">
+        <label><input type="radio" name="mode" id="modeCube" value="cube" checked> cubo</label>
+        <label><input type="radio" name="mode" id="modeProduct" value="product"> imagen de producto</label>
+      </div>
       <label><input type="checkbox" id="toggleDepth"> ver mapa de profundidad <kbd>D</kbd></label>
       <label><input type="checkbox" id="toggleVP" checked> ver punto de fuga <kbd>V</kbd></label>
+      <label><input type="checkbox" id="toggleAxes" checked> ver ejes <kbd>A</kbd></label>
       <label id="scaleLabel">
-        escala del cubo: <span id="scaleValue">1.00x</span>
+        escala: <span id="scaleValue">1.00x</span>
         <input type="range" id="cubeScale" min="0.3" max="3" step="0.05" value="1">
       </label>
     </div>
