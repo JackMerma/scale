@@ -62,6 +62,9 @@ const rotXVal = document.getElementById('rotXVal');
 const rotYVal = document.getElementById('rotYVal');
 const rotZVal = document.getElementById('rotZVal');
 const resetRotationBtn = document.getElementById('resetRotation');
+const generateAngleBtn = document.getElementById('generateAngleBtn');
+const genStatus = document.getElementById('genStatus');
+const resetSourceBtn = document.getElementById('resetSourceBtn');
 
 const img = new Image();
 const depthImg = new Image();
@@ -75,6 +78,8 @@ let depthData = null;          // Uint8ClampedArray RGBA del mapa de profundidad
 let DEPTH_MIN = 0, DEPTH_MAX = 255;
 let productAspect = 1;         // ancho/alto del CONTENIDO visible del PNG de producto (sin margen transparente)
 let productContentBox = null;  // {x, y, w, h} en px naturales del PNG: recorte del contenido no-transparente
+let productSourcePath = 'product.png'; // ruta relativa a data/, se actualiza al generar un nuevo angulo (permite encadenar)
+let generating = false;
 
 let displayMode = 'cube';      // 'cube' | 'product' -- que se dibuja sobre el punto colocado
 
@@ -106,10 +111,14 @@ function onAnyLoaded(which) {
 img.onload = () => { imgW = img.naturalWidth; imgH = img.naturalHeight; onAnyLoaded('img'); };
 depthImg.onload = () => { depthW = depthImg.naturalWidth; depthH = depthImg.naturalHeight; onAnyLoaded('depth'); };
 depthVisImg.onload = () => onAnyLoaded('depthVis');
+// Se reusa este mismo handler cuando mas adelante se reasigna productImg.src a una imagen
+// generada por Replicate (ver generateAngle) -- recalcula el recorte/aspecto y, si la escena
+// ya estaba lista, vuelve a dibujar.
 productImg.onload = () => {
   productContentBox = computeAlphaBBox(productImg);
   productAspect = productContentBox.w / productContentBox.h;
-  onAnyLoaded('product');
+  if (!loaded.product) onAnyLoaded('product');
+  else if (ready) render();
 };
 
 img.src = IMG_SRC;
@@ -636,6 +645,63 @@ rotYSlider.addEventListener('input', () => setRotation(rotX, degToRad(+rotYSlide
 rotZSlider.addEventListener('input', () => setRotation(rotX, rotY, degToRad(+rotZSlider.value)));
 resetRotationBtn.addEventListener('click', () => setRotation(0, 0, 0));
 
+// Si la pagina se abrio como file:// (doble click en index.html), fetch() no puede llegar al
+// servidor por ruta relativa -- se asume que node server.js corre en el puerto por defecto.
+// Si la sirvio el propio server.js (http://localhost:...), se usa ruta relativa (mismo origen).
+const API_BASE = location.protocol === 'file:' ? 'http://localhost:8787' : '';
+
+// Llama a POST /api/generate-angle (ver server.js) para generar, con
+// qwen/qwen-edit-multiangle en Replicate, una nueva foto del producto rotada segun rotY (el
+// unico eje que ese modelo entiende, en grados). El resultado se guarda en
+// data/generations/ en el servidor y pasa a ser el nuevo punto de partida (productSourcePath)
+// -- generaciones sucesivas encadenan sobre la ultima imagen generada, no siempre sobre la
+// original.
+async function generateAngle() {
+  if (generating) return;
+  generating = true;
+  generateAngleBtn.disabled = true;
+  genStatus.textContent = 'generando (rotación + remoción de fondo)... ~30-60s.';
+  genStatus.classList.remove('genError');
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/generate-angle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceImage: productSourcePath,
+        rotateDegrees: Math.round(radToDeg(rotY)),
+      }),
+    });
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || `Error ${resp.status}`);
+
+    productSourcePath = data.path;
+    productImg.src = data.dataUri; // dispara productImg.onload -> recalcula bbox y re-renderiza
+    // La imagen nueva YA es esa perspectiva; el giro manual acumulado dejaria de tener sentido
+    // aplicado encima (duplicaria el giro), asi que se resetea.
+    setRotation(0, 0, 0);
+
+    genStatus.textContent = `listo -- nuevo punto de partida: data/${data.path}`;
+  } catch (err) {
+    genStatus.textContent = `error: ${err.message}`;
+    genStatus.classList.add('genError');
+  } finally {
+    generating = false;
+    generateAngleBtn.disabled = false;
+  }
+}
+
+function resetProductSource() {
+  productSourcePath = 'product.png';
+  productImg.src = PRODUCT_DATA_URI;
+  setRotation(0, 0, 0);
+  genStatus.textContent = '';
+  genStatus.classList.remove('genError');
+}
+
+generateAngleBtn.addEventListener('click', generateAngle);
+resetSourceBtn.addEventListener('click', resetProductSource);
+
 renderRotationGizmo(); // dibuja el gizmo desde el arranque, no depende de los assets de la escena
 
 function updateHud() {
@@ -728,6 +794,9 @@ toggleVP.addEventListener('change', render);
 
 function setDisplayMode(mode) {
   displayMode = mode;
+  // La rotacion 3D (manual y la generacion via Replicate) solo aplica a la lamina de
+  // producto, no al cubo -- se deshabilita el boton para que no confunda en modo cubo.
+  generateAngleBtn.disabled = mode !== 'product' || generating;
   render();
 }
 modeCubeRadio.addEventListener('change', () => { if (modeCubeRadio.checked) setDisplayMode('cube'); });

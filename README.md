@@ -13,16 +13,28 @@ más abajo.
 
 ## Cómo correrlo
 
-Abrir `index.html` directamente en el navegador (no requiere build ni servidor).
-Click sobre la foto para colocar el objeto, arrastrar para moverlo. El panel
-izquierdo tiene los controles básicos; el derecho, la rotación 3D.
+Para todo excepto "generar esta perspectiva (IA)": abrir `index.html`
+directamente en el navegador, no requiere build ni servidor. Click sobre la
+foto para colocar el objeto, arrastrar para moverlo. El panel izquierdo tiene
+los controles básicos; el derecho, la rotación 3D.
+
+Para "generar esta perspectiva (IA)" hace falta el servidor local (ver
+"Generar ángulos con IA" más abajo):
+
+```
+1. Poner el token de Replicate en .env (REPLICATE_API_TOKEN=...)
+2. node server.js
+3. Abrir http://localhost:8787
+```
 
 ## Estructura
 
 ```
 index.html   estructura de la página
 style.css    estilos / diseño
-script.js    toda la lógica (carga de assets, muestreo de profundidad, dibujo)
+script.js    toda la lógica del frontend (carga de assets, muestreo de profundidad, dibujo)
+server.js    servidor local: sirve los archivos estaticos + POST /api/generate-angle
+.env         REPLICATE_API_TOKEN (no se commitea, ver .gitignore)
 data/        assets de entrada (ver abajo)
 ```
 
@@ -166,6 +178,117 @@ control, sin relación con el "cubo" que se coloca sobre la foto.
 
 Los dos sistemas de orientación (punto de fuga para el cubo, rotación libre
 para la lámina) son intencionalmente independientes y no se mezclan.
+
+## Generar ángulos con IA (qwen/qwen-edit-multiangle)
+
+Botón "generar esta perspectiva (IA)" en el panel derecho (solo activo en
+modo "imagen de producto"): en vez de rotar la foto original con la
+transformación afín de `drawProduct()`, le pide a
+[`qwen/qwen-edit-multiangle`](https://replicate.com/qwen/qwen-edit-multiangle)
+en Replicate que **genere una foto nueva** del producto real desde ese
+ángulo. Es un experimento — la primera prueba de esto, sin validar aún contra
+la API real (hace falta un `REPLICATE_API_TOKEN` para eso).
+
+### Por qué hace falta un servidor
+
+El token de Replicate no puede vivir en `script.js`: cualquiera que abra el
+código fuente de la página lo vería. `server.js` es un servidor Node mínimo
+(sin dependencias — usa `fetch`/`FormData`/`Blob` nativos de Node 18+) con
+dos trabajos: servir los archivos estáticos del proyecto, y exponer
+`POST /api/generate-angle`, el único lugar donde se usa el token.
+
+- Poner el token en `.env` (`REPLICATE_API_TOKEN=...`, ver el archivo — está
+  en `.gitignore`, nunca se commitea).
+- Correr `node server.js` (puerto `8787` por defecto, `PORT` para cambiarlo)
+  y abrir `http://localhost:8787`.
+- El resto de la app sigue funcionando igual si en cambio abrís `index.html`
+  directo (doble click) — **excepto este botón**, que en ese caso asume que
+  el servidor corre en `http://localhost:8787` (`API_BASE` en `script.js`) y
+  le pega ahí por `fetch` (con CORS habilitado en el servidor para que
+  funcione incluso desde una página `file://`).
+
+### Qué hace `POST /api/generate-angle`
+
+Recibe `{ sourceImage, rotateDegrees }` (`sourceImage` es una ruta relativa a
+`data/`, `rotateDegrees` un entero) y hace una cadena de **dos** modelos:
+
+1. **Sube la imagen** a Replicate (`POST /v1/files`, multipart) para
+   obtener una URL pública — los inputs de archivo del modelo aceptan URL o
+   data URL, pero data URL está limitado a 256kb, así que subir el archivo es
+   lo robusto para cualquier tamaño (`uploadToReplicate()`).
+2. **`qwen/qwen-edit-multiangle`**: genera la foto rotada, con
+   `{ image: <url subida>, go_fast: false, rotate_degrees: rotateDegrees }`.
+   Devuelve buena calidad de rotación, pero **no preserva el fondo
+   transparente** — pone su propio fondo de estudio. Confirmado probándolo
+   contra la API real.
+3. **`851-labs/background-remover`**: le pasa la salida del paso anterior
+   como `{ image: <url del paso 2>, background_type: "rgba", format: "png" }`
+   para recuperar la transparencia. Deja un canal alpha real, aunque puede
+   quedar algún resto tenue de sombra/reflejo del fondo original (limitación
+   del modelo de segmentación, aceptable para este prototipo).
+4. **Descarga la imagen final** y la guarda en `data/generations/`
+   (`gen-<timestamp>-<random>.<ext>`) — el punto de partida para la próxima
+   generación, para poder encadenar ángulos.
+5. Devuelve `{ ok: true, path, dataUri }`: `path` (relativo a `data/`) es lo
+   que el frontend manda como `sourceImage` la próxima vez; `dataUri` es la
+   imagen ya en base64 (con el content-type real detectado de la respuesta
+   de Replicate — ver nota abajo), para que `script.js` la muestre al toque
+   sin depender de si la página se abrió por `file://` o por el servidor.
+
+Ambas llamadas usan `runPrediction(model, input)`, que primero resuelve el id
+de la última versión del modelo (`GET /v1/models/{owner}/{name}`) y siempre
+pega contra el endpoint genérico `POST /v1/predictions` con `{ version,
+input }` — el endpoint "atajo" `POST /v1/models/{owner}/{name}/predictions`
+del curl de ejemplo (que sí funciona para `qwen-edit-multiangle`) le devolvió
+404 a `851-labs/background-remover`; no todos los modelos lo soportan, así
+que se resuelve la versión siempre por las dudas.
+
+**Nota sobre el formato**: `qwen-edit-multiangle` devolvió **WEBP**, no PNG,
+en la prueba real — el servidor detecta el `content-type` real de la
+descarga (`EXT_BY_CONTENT_TYPE`) en vez de asumir PNG a ciegas; guardar/
+declarar un archivo con el MIME equivocado hace que el `<img>`/data URI no
+cargue en el navegador. Como `background-remover` siempre devuelve el
+`format` pedido (`png`), la imagen *final* que ve el frontend termina siendo
+PNG de todos modos.
+
+### Qué hace el frontend (`generateAngle()` en `script.js`)
+
+- Manda `rotateDegrees = round(radToDeg(rotY))` — **el modelo solo entiende
+  un ángulo de rotación** (según el ejemplo de la API, `rotate_degrees`), así
+  que se mapea desde `rotY` (el eje de giro horizontal/"orbitar", el más
+  parecido a "rotar el producto a la izquierda/derecha X grados" que pidió
+  el usuario). `rotX`/`rotZ` no se le mandan al modelo — siguen aplicando
+  solo a la vista previa 3D local (`drawProduct()`) mientras no se genera.
+- Al recibir la respuesta: reemplaza `productImg.src` por el `dataUri`
+  (dispara de nuevo `computeAlphaBBox()` para recortar el margen
+  transparente de la imagen nueva), actualiza `productSourcePath` al `path`
+  devuelto (para encadenar), y **resetea la rotación manual a 0** — la
+  imagen nueva ya *es* esa perspectiva; seguir aplicando el giro manual
+  encima la duplicaría.
+- "usar imagen original" (`resetProductSource()`) vuelve a `data/product.png`
+  y limpia el estado, para poder repetir pruebas sin reiniciar el servidor.
+
+### Probado extremo a extremo
+
+A diferencia de una primera versión de esto (documentada solo en teoría),
+**se probó contra la API real** con un token válido: subida de archivo,
+generación del ángulo, remoción de fondo, descarga y guardado en
+`data/generations/` — las 4 pruebas manuales encontraron y corrigieron 2
+bugs reales (formato WEBP mal declarado como PNG, y el 404 del endpoint
+atajo para `background-remover`), documentados arriba.
+
+### Limitaciones conocidas
+
+- Solo se usa un eje de rotación (`rotY`); si más adelante se necesitan los
+  otros dos, hay que revisar si el modelo los soporta (no aparecían en el
+  ejemplo de la API que se usó de referencia).
+- La remoción de fondo puede dejar restos tenues de sombra/reflejo del fondo
+  de estudio original (visible en la prueba real) — no es un recorte perfecto.
+- Cada generación son 2 llamadas reales a Replicate en cadena (~25-45s,
+  tienen costo) — no hay caché ni debounce todavía.
+- Si `background-remover` fallara en dejar transparencia real,
+  `computeAlphaBBox()` cae en su fallback (usa el lienzo entero) en vez de
+  romper.
 
 ## Pendiente / ideas descartadas por ahora
 
