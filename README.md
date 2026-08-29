@@ -43,6 +43,15 @@ métrica en un JSON (float32 + sky_mask), porque este modelo da mejor resultado
 visual y, al coincidir en resolución exacta con la imagen real, no requiere
 reescalar/transformar coordenadas.
 
+## Control manual de escala
+
+El slider "escala del cubo" (o teclas `+`/`-`) aplica un multiplicador
+(`cubeScale`, 0.3x–3x) sobre el tamaño que ya calculó el mapeo por
+profundidad — no lo reemplaza. `cube.size` sigue siendo el tamaño base
+derivado de la profundidad; `cubeVertices()` es el único lugar que lo
+multiplica por `cubeScale` al construir la geometría, así que el efecto es
+consistente en todo (dibujo, hitbox de arrastre, HUD).
+
 ## Cómo funciona el mapeo profundidad → tamaño
 
 1. Al hacer click/arrastrar, se toma el punto `(x, y)` como el punto de apoyo

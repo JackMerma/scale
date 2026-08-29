@@ -33,6 +33,9 @@ const CUBE_SKEW_MAG_Y = 0.35; // desplazamiento vertical (siempre hacia arriba),
 const VP_DARK_PERCENTILE = 0.05; // % de pixeles mas lejanos (mas oscuros) usados para estimar el punto de fuga
 const VP_HANDLE_RADIUS = 9;      // px, tamaño del circulo arrastrable del punto de fuga
 
+const SCALE_MIN = 0.3;
+const SCALE_MAX = 3;
+
 // pares de caras opuestas: cada una comparte color con su opuesta (no visible)
 const COLOR_TOP_BOTTOM = '#3b82f6';  // azul
 const COLOR_FRONT_BACK = '#ef4444';  // rojo
@@ -44,6 +47,8 @@ const ctx = canvas.getContext('2d');
 const hud = document.getElementById('hud');
 const toggleDepth = document.getElementById('toggleDepth');
 const toggleVP = document.getElementById('toggleVP');
+const cubeScaleInput = document.getElementById('cubeScale');
+const scaleValueLabel = document.getElementById('scaleValue');
 
 const img = new Image();
 const depthImg = new Image();
@@ -56,8 +61,11 @@ let depthData = null;          // Uint8ClampedArray RGBA del mapa de profundidad
 let DEPTH_MIN = 0, DEPTH_MAX = 255;
 
 let cube = null;   // {x, y, size, depth} -- (x,y) es el punto de la cara inferior (contacto con el suelo)
+                    // "size" es el tamaño base derivado de la profundidad; el tamaño mostrado
+                    // se multiplica ademas por cubeScale (control manual del usuario).
 let dragging = false;
 let draggingVP = false;
+let cubeScale = 1;
 let ready = false;
 let loaded = { img: false, depth: false, depthVis: false };
 let vanishingPoint = null; // {x, y} en coords del mapa de profundidad (depthW x depthH)
@@ -263,7 +271,7 @@ function isNearVanishingPoint(x, y) {
 // izquierda, a la izquierda gira hacia la derecha, y por encima/debajo tambien inclina
 // hacia abajo/arriba -- simulando perspectiva de 1 punto en cualquier direccion.
 function cubeVertices(c) {
-  const s = c.size;
+  const s = c.size * cubeScale; // tamaño derivado de la profundidad, ajustado por el control manual
   const vp = vanishingPointDisplay();
 
   const dx = vp.x - c.x;
@@ -355,7 +363,7 @@ function updateHud() {
   hud.textContent =
     `x: ${cube.x.toFixed(0)}  y: ${cube.y.toFixed(0)} (cara inferior)\n` +
     `depth (raw 0-255): ${cube.depth.toFixed(1)}\n` +
-    `size: ${cube.size.toFixed(1)} px\n` +
+    `size: ${(cube.size * cubeScale).toFixed(1)} px (x${cubeScale.toFixed(2)})\n` +
     `depth range: ${DEPTH_MIN} .. ${DEPTH_MAX}\n` +
     `punto de fuga: (${vp.x.toFixed(0)}, ${vp.y.toFixed(0)})`;
 }
@@ -411,6 +419,15 @@ window.addEventListener('mouseup', () => {
 
 toggleDepth.addEventListener('change', render);
 toggleVP.addEventListener('change', render);
+
+function setCubeScale(value) {
+  cubeScale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, value));
+  cubeScaleInput.value = cubeScale;
+  scaleValueLabel.textContent = `${cubeScale.toFixed(2)}x`;
+  render();
+}
+
+cubeScaleInput.addEventListener('input', () => setCubeScale(parseFloat(cubeScaleInput.value)));
 
 window.addEventListener('keydown', (evt) => {
   if (evt.key === 'd' || evt.key === 'D') {
