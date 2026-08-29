@@ -1,0 +1,106 @@
+:root {
+  --bg: #eef1f6;
+  --card-bg: #ffffff;
+  --card-shadow: 0 20px 50px -12px rgba(20, 30, 60, 0.25), 0 0 0 1px rgba(20, 30, 60, 0.04);
+  --panel-bg: rgba(255, 255, 255, 0.85);
+  --panel-border: rgba(20, 30, 60, 0.08);
+  --text-main: #1c2333;
+  --text-muted: #5b6478;
+  --accent: #3b82f6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text-main);
+}
+
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#canvasCard {
+  height: 92vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-bg);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+  padding: 4px;
+}
+
+canvas {
+  display: block;
+  cursor: crosshair;
+  max-height: 100%;
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.panel {
+  position: absolute;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  backdrop-filter: blur(8px);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-main);
+  box-shadow: 0 8px 24px -8px rgba(20, 30, 60, 0.18);
+}
+
+#hud {
+  top: 18px;
+  left: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+#controls {
+  top: 18px;
+  right: 18px;
+}
+
+#controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-main);
+}
+
+#controls input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+kbd {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  background: rgba(20, 30, 60, 0.08);
+  border: 1px solid rgba(20, 30, 60, 0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-muted);
+}
