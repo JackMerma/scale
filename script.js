@@ -596,6 +596,19 @@ function renderRotationGizmo() {
 function radToDeg(r) { return (r * 180) / Math.PI; }
 function degToRad(d) { return (d * Math.PI) / 180; }
 
+const VERTICAL_TILT_THRESHOLD_DEG = 20; // por debajo de esto, rotX se manda como "nivel" (0)
+
+// El modelo solo soporta 3 valores de inclinacion vertical de camara (-1/0/1), no un angulo
+// continuo -- se deriva del signo/magnitud de rotX. El signo exacto (que lado es "vista de
+// pajaro" vs "de gusano" en nuestra convencion de rotX) no esta verificado contra la API
+// todavia; si sale al reves, invertir aca es el unico lugar que hace falta tocar.
+function verticalTiltFromRotX(rx) {
+  const deg = radToDeg(rx);
+  if (deg > VERTICAL_TILT_THRESHOLD_DEG) return 1;
+  if (deg < -VERTICAL_TILT_THRESHOLD_DEG) return -1;
+  return 0;
+}
+
 // Mantiene el angulo en (-PI, PI] -- asi el arrastre libre (que puede acumular vueltas) no
 // hace que los sliders (limitados a -180..180) se salgan de rango.
 function wrapAngle(a) {
@@ -664,13 +677,18 @@ async function generateAngle() {
   genStatus.classList.remove('genError');
 
   try {
+    // El modelo solo entiende dos angulos de camara, ninguno de ellos continuo:
+    //   rotate_degrees: entero, -90..90 (nuestro slider de Y permite -180..180, se clampea).
+    //   vertical_tilt: -1 (vista de pajaro) / 0 (nivel) / 1 (vista de gusano) -- de ahi se
+    //   deriva el "inclinar/acostar" el producto que antes no se le mandaba (solo afectaba
+    //   la vista previa 3D local). rotZ no tiene equivalente en este modelo, no se envia.
+    const rotateDegrees = Math.max(-90, Math.min(90, Math.round(radToDeg(rotY))));
+    const verticalTilt = verticalTiltFromRotX(rotX);
+
     const resp = await fetch(`${API_BASE}/api/generate-angle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sourceImage: productSourcePath,
-        rotateDegrees: Math.round(radToDeg(rotY)),
-      }),
+      body: JSON.stringify({ sourceImage: productSourcePath, rotateDegrees, verticalTilt }),
     });
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || `Error ${resp.status}`);

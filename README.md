@@ -253,12 +253,25 @@ PNG de todos modos.
 
 ### Qué hace el frontend (`generateAngle()` en `script.js`)
 
-- Manda `rotateDegrees = round(radToDeg(rotY))` — **el modelo solo entiende
-  un ángulo de rotación** (según el ejemplo de la API, `rotate_degrees`), así
-  que se mapea desde `rotY` (el eje de giro horizontal/"orbitar", el más
-  parecido a "rotar el producto a la izquierda/derecha X grados" que pidió
-  el usuario). `rotX`/`rotZ` no se le mandan al modelo — siguen aplicando
-  solo a la vista previa 3D local (`drawProduct()`) mientras no se genera.
+- Manda `rotateDegrees` (desde `rotY`, clampeado a **-90..90** — no -180..180
+  como el slider) y `verticalTilt` (desde `rotX`, ver abajo). `rotZ` no tiene
+  equivalente en este modelo y no se envía; sigue aplicando solo a la vista
+  previa 3D local (`drawProduct()`).
+- **Bug encontrado y corregido**: al principio solo se mandaba
+  `rotate_degrees` — rotar en X ("acostar" el producto) no cambiaba nada en
+  la imagen generada porque `rotX` nunca llegaba a la API, solo afectaba la
+  vista previa local. Consultando el schema real del modelo
+  (`GET /v1/models/qwen/qwen-edit-multiangle` con el token) apareció
+  `vertical_tilt`: entero, **-1 = vista de pájaro, 0 = nivel, 1 = vista de
+  gusano** (no un ángulo continuo). `verticalTiltFromRotX()` en `script.js`
+  lo deriva del signo de `rotX` con un umbral de 20° (`VERTICAL_TILT_THRESHOLD_DEG`)
+  para no disparar tilt con inclinaciones mínimas. Se probó contra la API
+  real con `-1` y `1` por separado y ambos cambian la perspectiva
+  visiblemente en la dirección esperada (`-1` muestra mucho más el interior/
+  tapa desde arriba; `1` la achata, más a la altura del ojo desde abajo).
+  También se confirmó que `rotate_degrees` fuera de -90..90 no está permitido
+  por el modelo — el servidor lo clampea de nuevo por las dudas
+  (`handleGenerateAngle` en `server.js`).
 - Al recibir la respuesta: reemplaza `productImg.src` por el `dataUri`
   (dispara de nuevo `computeAlphaBBox()` para recortar el margen
   transparente de la imagen nueva), actualiza `productSourcePath` al `path`
@@ -279,9 +292,16 @@ atajo para `background-remover`), documentados arriba.
 
 ### Limitaciones conocidas
 
-- Solo se usa un eje de rotación (`rotY`); si más adelante se necesitan los
-  otros dos, hay que revisar si el modelo los soporta (no aparecían en el
-  ejemplo de la API que se usó de referencia).
+- Se usan 2 de los 3 ejes (`rotY` → `rotate_degrees`, `rotX` → `vertical_tilt`);
+  `rotZ` no tiene equivalente en este modelo, no se envía.
+- `vertical_tilt` es discreto (-1/0/1, no un ángulo continuo) — inclinaciones
+  chicas en X (por debajo de `VERTICAL_TILT_THRESHOLD_DEG`, 20°) se mandan
+  como "nivel" (0), así que rotX no se refleja de forma gradual como en la
+  vista previa local, solo en 3 escalones.
+- El signo exacto de `verticalTiltFromRotX()` (qué lado de rotX es "vista de
+  pájaro" vs "de gusano") se fijó mirando el resultado real de la API una
+  vez, no se hizo un barrido exhaustivo — si en algún ángulo se siente al
+  revés, invertir el signo ahí es el único lugar que hace falta tocar.
 - La remoción de fondo puede dejar restos tenues de sombra/reflejo del fondo
   de estudio original (visible en la prueba real) — no es un recorte perfecto.
 - Cada generación son 2 llamadas reales a Replicate en cadena (~25-45s,

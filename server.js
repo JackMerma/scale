@@ -176,7 +176,7 @@ async function handleGenerateAngle(req, res) {
       return;
     }
 
-    const { sourceImage, rotateDegrees } = payload || {};
+    const { sourceImage, rotateDegrees, verticalTilt } = payload || {};
     if (typeof sourceImage !== 'string' || !Number.isFinite(rotateDegrees)) {
       sendJson(res, 400, { ok: false, error: 'sourceImage (string) y rotateDegrees (number) son requeridos.' });
       return;
@@ -188,11 +188,21 @@ async function handleGenerateAngle(req, res) {
       return;
     }
 
+    // El schema real del modelo (consultado via GET /v1/models/qwen/qwen-edit-multiangle) dice:
+    //   rotate_degrees: entero, minimo -90, maximo 90 (nuestro slider de Y permite -180..180).
+    //   vertical_tilt: entero, -1 (vista de pajaro) / 0 (nivel) / 1 (vista de gusano) -- este
+    //   es el que le faltaba al pipeline: rotX nunca se le mandaba al modelo, solo se usaba
+    //   para la vista previa 3D local, por eso "inclinar/acostar" el producto no se notaba en
+    //   la imagen generada.
+    const clampedRotate = Math.max(-90, Math.min(90, Math.round(rotateDegrees)));
+    const tilt = Number.isFinite(verticalTilt) ? Math.max(-1, Math.min(1, Math.round(verticalTilt))) : 0;
+
     const uploadedUrl = await uploadToReplicate(sourcePath);
     const rotatedUrl = await runPrediction(MODEL_ROTATE, {
       image: uploadedUrl,
       go_fast: false,
-      rotate_degrees: Math.round(rotateDegrees),
+      rotate_degrees: clampedRotate,
+      vertical_tilt: tilt,
     });
     // Segundo paso: la salida de qwen-edit-multiangle trae fondo de estudio propio, no
     // transparencia -- background-remover la reemplaza por un canal alpha real (rgba).
