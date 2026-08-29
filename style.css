@@ -24,13 +24,16 @@ html, body {
   color: var(--text-main);
 }
 
+/* Layout de 3 columnas: panel de info/controles | canvas principal | panel de rotacion.
+   Ninguno se superpone al canvas -- todos son paneles normales del flujo. */
 #stage {
-  position: relative;
   width: 100vw;
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 18px;
+  padding: 0 18px;
 }
 
 #canvasCard {
@@ -54,33 +57,39 @@ canvas {
 }
 
 .panel {
-  position: absolute;
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   backdrop-filter: blur(8px);
-  border-radius: 10px;
-  padding: 10px 14px;
+  border-radius: 14px;
+  padding: 14px;
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--text-main);
   box-shadow: 0 8px 24px -8px rgba(20, 30, 60, 0.18);
 }
 
+.sidePanel {
+  width: 230px;
+  flex-shrink: 0;
+  max-height: 92vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 #hud {
-  top: 18px;
-  left: 18px;
   font-variant-numeric: tabular-nums;
-  white-space: pre;
-  pointer-events: none;
+  white-space: pre-wrap;
   color: var(--text-muted);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--panel-border);
 }
 
 #controls {
-  top: 18px;
-  right: 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 #controls label {
@@ -102,8 +111,8 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-bottom: 6px;
-  margin-bottom: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
   border-bottom: 1px solid var(--panel-border);
 }
 
@@ -134,4 +143,88 @@ kbd {
   border-radius: 4px;
   padding: 1px 5px;
   color: var(--text-muted);
+}
+
+#rotationTitle {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+#rotCanvas {
+  width: 100%;
+  height: 200px;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 40%, #f4f6fa, #dde3ec);
+  border: 1px solid var(--panel-border);
+  cursor: grab;
+  touch-action: none;
+}
+
+#rotCanvas:active {
+  cursor: grabbing;
+}
+
+#rotationHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: -6px;
+}
+
+.rotAxisRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.axisTag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.axisX { background: #ef4444; }
+.axisY { background: #22c55e; }
+.axisZ { background: #3b82f6; }
+
+.rotAxisRow input[type="range"] {
+  flex: 1;
+  cursor: pointer;
+  accent-color: var(--text-muted);
+}
+
+.rotAxisRow:has(.axisX) input[type="range"] { accent-color: #ef4444; }
+.rotAxisRow:has(.axisY) input[type="range"] { accent-color: #22c55e; }
+.rotAxisRow:has(.axisZ) input[type="range"] { accent-color: #3b82f6; }
+
+.axisVal {
+  width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+#resetRotation {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-main);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+#resetRotation:hover {
+  background: rgba(20, 30, 60, 0.06);
 }

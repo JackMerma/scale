@@ -23,12 +23,11 @@ const MAX_SIZE = 180;       // px en pantalla (lado de la cara frontal), objeto 
 const SAMPLE_RADIUS = 6;    // radio (en px del mapa de profundidad) para promediar y evitar ruido
 const VIEWPORT_FIT = 0.92;  // fraccion del alto de ventana que ocupa la imagen
 
-// --- Orientacion del cubo segun el punto de fuga ---
-// La cara trasera del cubo recede hacia el punto de fuga estimado a partir del mapa de
-// profundidad (ver cubeVertices), imitando la perspectiva de 1 punto que usan los
-// ilustradores. Es un desplazamiento uniforme (mismo vector para las 4 esquinas), no una
-// convergencia real -- el cubo es solo referencial, no hace falta que se achique/deforme
-// con el tamaño; se probo esa version y quedaba demasiado exagerada.
+// --- Orientacion automatica del cubo segun el punto de fuga ---
+// El cubo del canvas principal se orienta solo, hacia el punto de fuga de la escena (ver
+// vpDirectionFor/cubeVertices) -- perspectiva de 1 punto, no depende del control de
+// rotacion manual. Es un desplazamiento uniforme (mismo vector para las 4 esquinas), no una
+// convergencia geometrica real; se probo esa version y quedaba demasiado exagerada.
 const CUBE_SKEW_MAG_X = 0.7;  // maximo desplazamiento horizontal (hacia el punto de fuga), relativo al tamaño
 const CUBE_SKEW_MAG_Y = 0.35; // desplazamiento vertical (siempre hacia arriba), relativo al tamaño
 const VP_DARK_PERCENTILE = 0.05; // % de pixeles mas lejanos (mas oscuros) usados para estimar el punto de fuga
@@ -37,12 +36,11 @@ const VP_HANDLE_RADIUS = 9;      // px, tamaño del circulo arrastrable del punt
 const SCALE_MIN = 0.3;
 const SCALE_MAX = 3;
 
-// pares de caras opuestas: cada una comparte color con su opuesta (no visible)
-// Los colores de las caras coinciden con los del eje al que pertenecen (ver drawAxes):
-// izquierda/derecha corre a lo largo del eje X, arriba/abajo del eje Y, frente/atras del eje Z.
-const COLOR_X = '#ef4444';  // rojo  -- cara izquierda/derecha
-const COLOR_Y = '#22c55e';  // verde -- cara arriba/abajo
-const COLOR_Z = '#3b82f6';  // azul  -- cara frente/atras
+// La lamina de producto usa rotacion 3D libre (rotX/rotY/rotZ, ver setRotation); el cubo NO
+// (ver arriba). Cada par de caras opuestas comparte color:
+const COLOR_X = '#ef4444';  // rojo  -- caras +X/-X (o izquierda/derecha en el cubo)
+const COLOR_Y = '#22c55e';  // verde -- caras +Y/-Y (o arriba/abajo en el cubo)
+const COLOR_Z = '#3b82f6';  // azul  -- caras +Z/-Z (o frente/atras en el cubo)
 
 // ---------- Estado ----------
 const canvas = document.getElementById('c');
@@ -50,11 +48,20 @@ const ctx = canvas.getContext('2d');
 const hud = document.getElementById('hud');
 const toggleDepth = document.getElementById('toggleDepth');
 const toggleVP = document.getElementById('toggleVP');
-const toggleAxes = document.getElementById('toggleAxes');
 const cubeScaleInput = document.getElementById('cubeScale');
 const scaleValueLabel = document.getElementById('scaleValue');
 const modeCubeRadio = document.getElementById('modeCube');
 const modeProductRadio = document.getElementById('modeProduct');
+
+const rotCanvas = document.getElementById('rotCanvas');
+const rotCtx = rotCanvas.getContext('2d');
+const rotXSlider = document.getElementById('rotXSlider');
+const rotYSlider = document.getElementById('rotYSlider');
+const rotZSlider = document.getElementById('rotZSlider');
+const rotXVal = document.getElementById('rotXVal');
+const rotYVal = document.getElementById('rotYVal');
+const rotZVal = document.getElementById('rotZVal');
+const resetRotationBtn = document.getElementById('resetRotation');
 
 const img = new Image();
 const depthImg = new Image();
@@ -79,6 +86,15 @@ let cube = null;   // {x, y, size, depth} -- (x,y) es el punto de apoyo en el su
 let dragging = false;
 let draggingVP = false;
 let cubeScale = 1;
+
+// Orientacion libre (radianes) de la "lamina" de producto en el eje X/Y/Z propio, controlada
+// desde el mini-canvas de rotacion. Independiente de la orientacion del cubo hacia el punto
+// de fuga -- esta es una rotacion 3D real (no un skew), aplicada solo cuando displayMode
+// es 'product'. Ver rotateVec3() y drawProduct().
+let rotX = 0, rotY = 0, rotZ = 0;
+let rotDragging = false;
+let rotDragLast = null;
+
 let ready = false;
 let loaded = { img: false, depth: false, depthVis: false, product: false };
 
@@ -320,8 +336,10 @@ function isNearVanishingPoint(x, y) {
 }
 
 // Direccion 2D real (no solo horizontal) desde un punto hacia el punto de fuga, mas la
-// magnitud de skew resultante para un tamaño "s" dado. La usan tanto el cubo (cubeVertices)
-// como el gizmo de ejes de la imagen de producto (drawProduct), asi ambos "giran" igual.
+// magnitud de skew resultante para un tamaño "s" dado. El cubo del canvas principal se
+// orienta con esto -- SOLO el, la lamina de producto usa la rotacion 3D libre del panel
+// derecho (rotX/rotY/rotZ). Son dos sistemas de orientacion independientes a proposito:
+// el cubo modela perspectiva de escena automaticamente; la lamina se orienta a mano.
 function vpDirectionFor(x, y, s) {
   const vp = vanishingPointDisplay();
   const dx = vp.x - x;
@@ -342,10 +360,12 @@ function vpDirectionFor(x, y, s) {
 // La cara "trasera" recede hacia el punto de fuga de la escena en su direccion 2D real
 // (no solo horizontal): si el cubo queda a la derecha del punto de fuga gira hacia la
 // izquierda, a la izquierda gira hacia la derecha, y por encima/debajo tambien inclina
-// hacia abajo/arriba -- simulando perspectiva de 1 punto en cualquier direccion.
+// hacia abajo/arriba -- simulando perspectiva de 1 punto en cualquier direccion. Esto es
+// automatico: se recalcula en cada render segun la posicion del cubo y del punto de fuga,
+// nunca segun rotX/rotY/rotZ (esos solo afectan a la lamina de producto).
 function cubeVertices(c) {
   const s = c.size * cubeScale; // tamaño derivado de la profundidad, ajustado por el control manual
-  const { nx, ny, skewX, skewY } = vpDirectionFor(c.x, c.y, s);
+  const { skewX, skewY } = vpDirectionFor(c.x, c.y, s);
 
   const FBL = { x: c.x - s / 2, y: c.y };
   const FBR = { x: c.x + s / 2, y: c.y };
@@ -358,7 +378,7 @@ function cubeVertices(c) {
   const RBR = back(FBR);
   const RBL = back(FBL);
 
-  return { FBL, FBR, FTR, FTL, TTR, TTL, RBR, RBL, skewX, skewY, s, nx, ny };
+  return { FBL, FBR, FTR, FTL, TTR, TTL, RBR, RBL, skewX, skewY, s };
 }
 
 function drawCube(c) {
@@ -366,8 +386,8 @@ function drawCube(c) {
 
   // cara superior/inferior (arriba/abajo). Segun hacia donde recede el cubo (signo de
   // skewY), la cara realmente visible es la de arriba o la de abajo -- si el punto de
-  // fuga queda por encima del cubo se ve la cara de arriba (como antes); si queda por
-  // debajo (el cubo esta mas arriba que el punto de fuga), se ve la de abajo.
+  // fuga queda por encima del cubo se ve la cara de arriba; si queda por debajo (el cubo
+  // esta mas arriba que el punto de fuga), se ve la de abajo.
   ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
   if (v.skewY <= 0) {
@@ -416,97 +436,207 @@ function drawCube(c) {
   ctx.fillStyle = COLOR_Z;
   ctx.fill();
   ctx.stroke();
-
-  if (toggleAxes.checked) drawAxes(v);
 }
 
-// Ejes locales del cubo (X=rojo, Y=verde, Z=azul), saliendo de su centro geometrico.
-// Cada flecha apunta hacia el lado que realmente esta visible (mismo criterio que usa
-// drawCube para elegir la cara): si se ve la cara derecha, la flecha X sale hacia la
-// derecha; si se ve la izquierda, sale hacia la izquierda. Igual para Y (arriba/abajo).
-// Z ya es inherentemente correcta: apunta hacia el punto de fuga, que es la misma
-// direccion de la cara trasera visible.
-function drawAxes(v) {
-  // Punto medio entre el centro de la cara frontal y el de la trasera (los 4 vertices de
-  // cada una ya no forman necesariamente un rectangulo igual al otro, asi que se promedian
-  // en vez de asumir un desplazamiento uniforme).
-  const frontCenter = {
-    x: (v.FBL.x + v.FBR.x + v.FTR.x + v.FTL.x) / 4,
-    y: (v.FBL.y + v.FBR.y + v.FTR.y + v.FTL.y) / 4,
-  };
-  const backCenter = {
-    x: (v.RBL.x + v.RBR.x + v.TTR.x + v.TTL.x) / 4,
-    y: (v.RBL.y + v.RBR.y + v.TTR.y + v.TTL.y) / 4,
-  };
-  const center = {
-    x: (frontCenter.x + backCenter.x) / 2,
-    y: (frontCenter.y + backCenter.y) / 2,
-  };
-  const len = v.s * 0.75;
-
-  const xDir = v.skewX >= 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };  // cara derecha o izquierda visible
-  const yDir = v.skewY <= 0 ? { x: 0, y: -1 } : { x: 0, y: 1 };  // cara de arriba o de abajo visible
-
-  drawAxisArrow(center, xDir, len, COLOR_X);
-  drawAxisArrow(center, yDir, len, COLOR_Y);
-  drawAxisArrow(center, { x: v.nx, y: v.ny }, len, COLOR_Z); // hacia el punto de fuga
-}
-
-function drawAxisArrow(origin, dir, length, color) {
+// ctxArg permite reusar esta funcion tanto en el canvas principal como en el mini-canvas
+// de rotacion (rotCtx), que tienen su propio contexto 2D.
+function drawAxisArrow(ctxArg, origin, dir, length, color) {
   const tip = { x: origin.x + dir.x * length, y: origin.y + dir.y * length };
   const headLen = Math.min(10, length * 0.3);
   const angle = Math.atan2(dir.y, dir.x);
 
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 2.5;
-  ctx.lineCap = 'round';
+  ctxArg.save();
+  ctxArg.strokeStyle = color;
+  ctxArg.fillStyle = color;
+  ctxArg.lineWidth = 2.5;
+  ctxArg.lineCap = 'round';
 
-  ctx.beginPath();
-  ctx.moveTo(origin.x, origin.y);
-  ctx.lineTo(tip.x, tip.y);
-  ctx.stroke();
+  ctxArg.beginPath();
+  ctxArg.moveTo(origin.x, origin.y);
+  ctxArg.lineTo(tip.x, tip.y);
+  ctxArg.stroke();
 
-  ctx.beginPath();
-  ctx.moveTo(tip.x, tip.y);
-  ctx.lineTo(tip.x - headLen * Math.cos(angle - Math.PI / 6), tip.y - headLen * Math.sin(angle - Math.PI / 6));
-  ctx.lineTo(tip.x - headLen * Math.cos(angle + Math.PI / 6), tip.y - headLen * Math.sin(angle + Math.PI / 6));
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
+  ctxArg.beginPath();
+  ctxArg.moveTo(tip.x, tip.y);
+  ctxArg.lineTo(tip.x - headLen * Math.cos(angle - Math.PI / 6), tip.y - headLen * Math.sin(angle - Math.PI / 6));
+  ctxArg.lineTo(tip.x - headLen * Math.cos(angle + Math.PI / 6), tip.y - headLen * Math.sin(angle + Math.PI / 6));
+  ctxArg.closePath();
+  ctxArg.fill();
+  ctxArg.restore();
 }
 
-// Dibuja la imagen de producto (PNG con fondo transparente) como un plano recto anclado por
-// abajo, con el mismo posicionamiento/tamaño por profundidad que el cubo (comparten "cube").
-// No tiene caras que elegir (es plana, sin grosor real en Z), pero se le muestra el mismo
-// gizmo de ejes X/Y/Z que al cubo, orientado igual segun el punto de fuga -- el eje Z
-// representa la profundidad "que no tiene" la imagen, como referencia.
+// Rota un vector 3D (x,y,z) por los angulos rx,ry,rz (radianes), en orden Rz * Ry * Rx.
+// +X = derecha, +Y = arriba, +Z = hacia el espectador (sale de la pantalla). Se usa tanto
+// para orientar la "lamina" de producto (drawProduct) como el cubo del mini-canvas de
+// rotacion (renderRotationGizmo) -- ambos comparten exactamente el mismo estado rotX/Y/Z.
+function rotateVec3(v, rx, ry, rz) {
+  let { x, y, z } = v;
+
+  // Nota: el signo de rx esta invertido a proposito respecto a una rotacion estandar --
+  // asi arrastrar/subir el slider de X inclina la lamina "hacia arriba" de forma intuitiva
+  // en vez de al reves (se detecto invertido al probar el control).
+  let cx = Math.cos(rx), sx = Math.sin(rx);
+  let y1 = y * cx + z * sx;
+  let z1 = -y * sx + z * cx;
+
+  let cy = Math.cos(ry), sy = Math.sin(ry);
+  let x2 = x * cy + z1 * sy;
+  let z2 = -x * sy + z1 * cy;
+
+  let cz = Math.cos(rz), sz = Math.sin(rz);
+  let x3 = x2 * cz - y1 * sz;
+  let y3 = x2 * sz + y1 * cz;
+
+  return { x: x3, y: y3, z: z2 };
+}
+
+// Proyecta ortograficamente un vector 3D local (ya rotado) a un delta de pantalla, con el
+// origen en "origin". Se invierte el eje Y porque en pantalla y crece hacia abajo. Devuelve
+// tambien la longitud proyectada, para poder reusar drawAxisArrow(dir unitario, length).
+function projectArrow(rx, ry, rz, localVec) {
+  const r = rotateVec3(localVec, rx, ry, rz);
+  const dx = r.x, dy = -r.y;
+  const len = Math.hypot(dx, dy) || 0.0001;
+  return { dir: { x: dx / len, y: dy / len }, len };
+}
+
+// Dibuja la imagen de producto (PNG con fondo transparente) como una lamina plana anclada
+// por abajo, con el mismo posicionamiento/tamaño por profundidad que el cubo (comparten
+// "cube"). A diferencia del cubo, esta lamina tiene una orientacion 3D libre (rotX/Y/Z,
+// controlada desde el mini-canvas de rotacion) -- se proyecta ortograficamente, lo que hace
+// que el rectangulo rotado siempre caiga en un paralelogramo, y ese paralelogramo se puede
+// mapear exactamente con una transformacion afin de canvas (setTransform), sin necesitar
+// WebGL ni deformar la imagen "a mano".
 function drawProduct(c) {
   const s = c.size * cubeScale;
   const width = s * productAspect;
-  const x0 = c.x - width / 2;
-  const y0 = c.y - s;
-
-  // Se recorta el margen transparente del PNG (productContentBox) al dibujar, para que el
-  // contenido visible llene exactamente el tamaño derivado de profundidad en vez de quedar
-  // mas chico por el padding vacio alrededor del producto.
+  const halfW = width / 2, halfH = s / 2;
   const b = productContentBox;
-  ctx.drawImage(productImg, b.x, b.y, b.w, b.h, x0, y0, width, s);
+  const center = { x: c.x, y: c.y - halfH }; // centro de la lamina sin rotar
 
-  if (toggleAxes.checked) {
-    const { nx, ny, skewX, skewY } = vpDirectionFor(c.x, c.y, s);
-    const center = { x: c.x, y: c.y - s / 2 }; // centro del plano; sin cara trasera que promediar
-    const len = s * 0.75;
+  const TL = rotateVec3({ x: -halfW, y: +halfH, z: 0 }, rotX, rotY, rotZ);
+  const TR = rotateVec3({ x: +halfW, y: +halfH, z: 0 }, rotX, rotY, rotZ);
+  const BL = rotateVec3({ x: -halfW, y: -halfH, z: 0 }, rotX, rotY, rotZ);
+  const normal = rotateVec3({ x: 0, y: 0, z: 1 }, rotX, rotY, rotZ);
 
-    const xDir = skewX >= 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
-    const yDir = skewY <= 0 ? { x: 0, y: -1 } : { x: 0, y: 1 };
+  const toScreen = (p) => ({ x: center.x + p.x, y: center.y - p.y });
+  const P00 = toScreen(TL); // esquina superior-izquierda del contenido recortado
+  const P10 = toScreen(TR); // superior-derecha
+  const P01 = toScreen(BL); // inferior-izquierda (la 4ta esquina queda implicita: P10+P01-P00)
 
-    drawAxisArrow(center, xDir, len, COLOR_X);
-    drawAxisArrow(center, yDir, len, COLOR_Y);
-    drawAxisArrow(center, { x: nx, y: ny }, len, COLOR_Z);
-  }
+  // Transformacion afin que manda el rectangulo fuente (b.w x b.h) al paralelogramo P00-P10-P01.
+  const a = (P10.x - P00.x) / b.w;
+  const bb = (P10.y - P00.y) / b.w;
+  const cc = (P01.x - P00.x) / b.h;
+  const dd = (P01.y - P00.y) / b.h;
+
+  ctx.save();
+  // Si la normal rotada mira hacia adentro de la pantalla, estamos viendo el "reverso" de la
+  // lamina (no hay textura trasera real) -- se atenua para dar esa pista visual.
+  ctx.globalAlpha = normal.z >= 0 ? 1 : 0.35;
+  ctx.setTransform(a, bb, cc, dd, P00.x, P00.y);
+  ctx.drawImage(productImg, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  ctx.restore(); // tambien revierte setTransform a como estaba antes (identidad)
 }
+
+// Vertices de un cubo unitario (-1..1 por eje) indexados por 3 bits: bit0=x, bit1=y, bit2=z.
+const GIZMO_CUBE_CORNERS = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({
+  x: (i & 1) ? 1 : -1,
+  y: (i & 2) ? 1 : -1,
+  z: (i & 4) ? 1 : -1,
+}));
+const GIZMO_CUBE_EDGES = [
+  [0, 1], [1, 3], [3, 2], [2, 0], // cara z=-1
+  [4, 5], [5, 7], [7, 6], [6, 4], // cara z=+1
+  [0, 4], [1, 5], [2, 6], [3, 7], // aristas verticales (en z)
+];
+
+// Dibuja el cubo/gizmo del mini-canvas de rotacion: un cubo en wireframe mas los 3 ejes,
+// todo rotado por el mismo rotX/rotY/rotZ que orienta la lamina de producto en el canvas
+// principal -- es el control interactivo, "como en AutoCAD", para orientarla.
+function renderRotationGizmo() {
+  const w = rotCanvas.width, h = rotCanvas.height;
+  rotCtx.clearRect(0, 0, w, h);
+  const center = { x: w / 2, y: h / 2 };
+  const cubeHalf = Math.min(w, h) * 0.22;
+
+  const projected = GIZMO_CUBE_CORNERS.map(p => {
+    const r = rotateVec3({ x: p.x * cubeHalf, y: p.y * cubeHalf, z: p.z * cubeHalf }, rotX, rotY, rotZ);
+    return { x: center.x + r.x, y: center.y - r.y, z: r.z };
+  });
+
+  rotCtx.strokeStyle = 'rgba(28, 35, 51, 0.5)';
+  rotCtx.lineWidth = 1.5;
+  for (const [ia, ib] of GIZMO_CUBE_EDGES) {
+    rotCtx.beginPath();
+    rotCtx.moveTo(projected[ia].x, projected[ia].y);
+    rotCtx.lineTo(projected[ib].x, projected[ib].y);
+    rotCtx.stroke();
+  }
+
+  const axisLen = cubeHalf * 1.7;
+  const xArrow = projectArrow(rotX, rotY, rotZ, { x: axisLen, y: 0, z: 0 });
+  const yArrow = projectArrow(rotX, rotY, rotZ, { x: 0, y: axisLen, z: 0 });
+  const zArrow = projectArrow(rotX, rotY, rotZ, { x: 0, y: 0, z: axisLen });
+
+  drawAxisArrow(rotCtx, center, xArrow.dir, xArrow.len, COLOR_X);
+  drawAxisArrow(rotCtx, center, yArrow.dir, yArrow.len, COLOR_Y);
+  drawAxisArrow(rotCtx, center, zArrow.dir, zArrow.len, COLOR_Z);
+}
+
+function radToDeg(r) { return (r * 180) / Math.PI; }
+function degToRad(d) { return (d * Math.PI) / 180; }
+
+// Mantiene el angulo en (-PI, PI] -- asi el arrastre libre (que puede acumular vueltas) no
+// hace que los sliders (limitados a -180..180) se salgan de rango.
+function wrapAngle(a) {
+  const twoPi = Math.PI * 2;
+  a = ((a + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+  return a;
+}
+
+function setRotation(rx, ry, rz) {
+  rotX = wrapAngle(rx);
+  rotY = wrapAngle(ry);
+  rotZ = wrapAngle(rz);
+
+  rotXSlider.value = radToDeg(rotX);
+  rotYSlider.value = radToDeg(rotY);
+  rotZSlider.value = radToDeg(rotZ);
+  rotXVal.textContent = `${radToDeg(rotX).toFixed(0)}°`;
+  rotYVal.textContent = `${radToDeg(rotY).toFixed(0)}°`;
+  rotZVal.textContent = `${radToDeg(rotZ).toFixed(0)}°`;
+
+  renderRotationGizmo();
+  if (ready) render(); // actualiza la lamina de producto en el canvas principal
+}
+
+const ROT_DRAG_SENSITIVITY = 0.012; // radianes por px arrastrado
+
+rotCanvas.addEventListener('mousedown', (evt) => {
+  rotDragging = true;
+  rotDragLast = { x: evt.clientX, y: evt.clientY };
+});
+
+window.addEventListener('mousemove', (evt) => {
+  if (!rotDragging) return;
+  const dx = evt.clientX - rotDragLast.x;
+  const dy = evt.clientY - rotDragLast.y;
+  rotDragLast = { x: evt.clientX, y: evt.clientY };
+  // arrastrar horizontal -> orbitar en Y, vertical -> orbitar en X (como orbitar una camara)
+  setRotation(rotX - dy * ROT_DRAG_SENSITIVITY, rotY + dx * ROT_DRAG_SENSITIVITY, rotZ);
+});
+
+window.addEventListener('mouseup', () => {
+  rotDragging = false;
+});
+
+rotXSlider.addEventListener('input', () => setRotation(degToRad(+rotXSlider.value), rotY, rotZ));
+rotYSlider.addEventListener('input', () => setRotation(rotX, degToRad(+rotYSlider.value), rotZ));
+rotZSlider.addEventListener('input', () => setRotation(rotX, rotY, degToRad(+rotZSlider.value)));
+resetRotationBtn.addEventListener('click', () => setRotation(0, 0, 0));
+
+renderRotationGizmo(); // dibuja el gizmo desde el arranque, no depende de los assets de la escena
 
 function updateHud() {
   if (!cube) {
@@ -514,13 +644,19 @@ function updateHud() {
     return;
   }
   const vp = vanishingPointDisplay();
+  // La rotacion manual (panel derecho) solo afecta a la lamina de producto, no al cubo --
+  // se muestra en el HUD unicamente cuando ese es el modo activo.
+  const rotLine = displayMode === 'product'
+    ? `\nrotación: X ${radToDeg(rotX).toFixed(0)}°  Y ${radToDeg(rotY).toFixed(0)}°  Z ${radToDeg(rotZ).toFixed(0)}°`
+    : '';
   hud.textContent =
     `modo: ${displayMode === 'product' ? 'imagen de producto' : 'cubo'}\n` +
     `x: ${cube.x.toFixed(0)}  y: ${cube.y.toFixed(0)} (punto de apoyo)\n` +
     `depth (raw 0-255): ${cube.depth.toFixed(1)}\n` +
     `size: ${(cube.size * cubeScale).toFixed(1)} px (x${cubeScale.toFixed(2)})\n` +
     `depth range: ${DEPTH_MIN} .. ${DEPTH_MAX}\n` +
-    `punto de fuga: (${vp.x.toFixed(0)}, ${vp.y.toFixed(0)})`;
+    `punto de fuga: (${vp.x.toFixed(0)}, ${vp.y.toFixed(0)})` +
+    rotLine;
 }
 
 function getCanvasCoords(evt) {
@@ -528,6 +664,7 @@ function getCanvasCoords(evt) {
   return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
 }
 
+// Test de "click cerca del cubo existente" usando el bounding box de sus vertices visibles.
 // Test de "click cerca del cubo existente" usando el bounding box de sus vertices visibles.
 function isNearCube(x, y) {
   if (!cube) return false;
@@ -588,7 +725,6 @@ window.addEventListener('mouseup', () => {
 
 toggleDepth.addEventListener('change', render);
 toggleVP.addEventListener('change', render);
-toggleAxes.addEventListener('change', render);
 
 function setDisplayMode(mode) {
   displayMode = mode;
@@ -612,9 +748,6 @@ window.addEventListener('keydown', (evt) => {
     render();
   } else if (evt.key === 'v' || evt.key === 'V') {
     toggleVP.checked = !toggleVP.checked;
-    render();
-  } else if (evt.key === 'a' || evt.key === 'A') {
-    toggleAxes.checked = !toggleAxes.checked;
     render();
   }
 });

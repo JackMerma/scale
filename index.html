@@ -8,24 +8,49 @@
 </head>
 <body>
   <main id="stage">
+    <div id="infoPanel" class="panel sidePanel">
+      <div id="hud">click / arrastra para colocar el objeto</div>
+
+      <div id="controls">
+        <div id="modeSwitch">
+          <label><input type="radio" name="mode" id="modeCube" value="cube" checked> cubo</label>
+          <label><input type="radio" name="mode" id="modeProduct" value="product"> imagen de producto</label>
+        </div>
+        <label><input type="checkbox" id="toggleDepth"> ver mapa de profundidad <kbd>D</kbd></label>
+        <label><input type="checkbox" id="toggleVP" checked> ver punto de fuga <kbd>V</kbd></label>
+        <label id="scaleLabel">
+          escala: <span id="scaleValue">1.00x</span>
+          <input type="range" id="cubeScale" min="0.3" max="3" step="0.05" value="1">
+        </label>
+      </div>
+    </div>
+
     <div id="canvasCard">
       <canvas id="c"></canvas>
     </div>
 
-    <div id="hud" class="panel">click / arrastra para colocar el objeto</div>
+    <div id="rotationCard" class="panel sidePanel">
+      <div id="rotationTitle">rotación del producto</div>
+      <canvas id="rotCanvas" width="200" height="200"></canvas>
+      <div id="rotationHint">arrastrá el cubo para orbitar</div>
 
-    <div id="controls" class="panel">
-      <div id="modeSwitch">
-        <label><input type="radio" name="mode" id="modeCube" value="cube" checked> cubo</label>
-        <label><input type="radio" name="mode" id="modeProduct" value="product"> imagen de producto</label>
+      <div class="rotAxisRow">
+        <span class="axisTag axisX">X</span>
+        <input type="range" id="rotXSlider" min="-180" max="180" step="1" value="0">
+        <span class="axisVal" id="rotXVal">0°</span>
       </div>
-      <label><input type="checkbox" id="toggleDepth"> ver mapa de profundidad <kbd>D</kbd></label>
-      <label><input type="checkbox" id="toggleVP" checked> ver punto de fuga <kbd>V</kbd></label>
-      <label><input type="checkbox" id="toggleAxes" checked> ver ejes <kbd>A</kbd></label>
-      <label id="scaleLabel">
-        escala: <span id="scaleValue">1.00x</span>
-        <input type="range" id="cubeScale" min="0.3" max="3" step="0.05" value="1">
-      </label>
+      <div class="rotAxisRow">
+        <span class="axisTag axisY">Y</span>
+        <input type="range" id="rotYSlider" min="-180" max="180" step="1" value="0">
+        <span class="axisVal" id="rotYVal">0°</span>
+      </div>
+      <div class="rotAxisRow">
+        <span class="axisTag axisZ">Z</span>
+        <input type="range" id="rotZSlider" min="-180" max="180" step="1" value="0">
+        <span class="axisVal" id="rotZVal">0°</span>
+      </div>
+
+      <button id="resetRotation" type="button">reset</button>
     </div>
   </main>
 
