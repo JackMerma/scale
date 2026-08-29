@@ -78,6 +78,9 @@ canvas {
 #controls {
   top: 18px;
   right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 #controls label {

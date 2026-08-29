@@ -20,9 +20,18 @@ const DEPTH_VIS_SRC = 'data/background/prediction-1.png';
 const MIN_SIZE = 16;        // px en pantalla (lado de la cara frontal), objeto mas lejano
 const MAX_SIZE = 180;       // px en pantalla (lado de la cara frontal), objeto mas cercano
 const SAMPLE_RADIUS = 6;    // radio (en px del mapa de profundidad) para promediar y evitar ruido
-const CUBE_SKEW_X = 0.5;    // desplazamiento horizontal de las caras top/right, relativo al tamaño
-const CUBE_SKEW_Y = 0.35;   // desplazamiento vertical de las caras top/right, relativo al tamaño
 const VIEWPORT_FIT = 0.92;  // fraccion del alto de ventana que ocupa la imagen
+
+// --- Orientacion del cubo segun el punto de fuga ---
+// La cara top/right del cubo (la que representa la profundidad, "hacia adentro" de la
+// escena) ya no tiene un desplazamiento fijo: apunta hacia el punto de fuga estimado a
+// partir del mapa de profundidad. Asi, si el cubo se mueve a la derecha del punto de fuga,
+// esa cara "gira" hacia la izquierda (y viceversa), imitando la perspectiva de 1 punto que
+// usan los ilustradores.
+const CUBE_SKEW_MAG_X = 0.7;  // maximo desplazamiento horizontal (hacia el punto de fuga), relativo al tamaño
+const CUBE_SKEW_MAG_Y = 0.35; // desplazamiento vertical (siempre hacia arriba), relativo al tamaño
+const VP_DARK_PERCENTILE = 0.05; // % de pixeles mas lejanos (mas oscuros) usados para estimar el punto de fuga
+const VP_HANDLE_RADIUS = 9;      // px, tamaño del circulo arrastrable del punto de fuga
 
 // pares de caras opuestas: cada una comparte color con su opuesta (no visible)
 const COLOR_TOP_BOTTOM = '#3b82f6';  // azul
@@ -34,6 +43,7 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const hud = document.getElementById('hud');
 const toggleDepth = document.getElementById('toggleDepth');
+const toggleVP = document.getElementById('toggleVP');
 
 const img = new Image();
 const depthImg = new Image();
@@ -47,8 +57,10 @@ let DEPTH_MIN = 0, DEPTH_MAX = 255;
 
 let cube = null;   // {x, y, size, depth} -- (x,y) es el punto de la cara inferior (contacto con el suelo)
 let dragging = false;
+let draggingVP = false;
 let ready = false;
 let loaded = { img: false, depth: false, depthVis: false };
+let vanishingPoint = null; // {x, y} en coords del mapa de profundidad (depthW x depthH)
 
 function onAnyLoaded(which) {
   loaded[which] = true;
@@ -84,10 +96,53 @@ function init() {
     if (v > DEPTH_MAX) DEPTH_MAX = v;
   }
 
+  vanishingPoint = estimateVanishingPoint();
+
   ready = true;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   resize();
+}
+
+// Estima el "punto de fuga" (vanishing point) de la escena a partir del mapa de profundidad:
+// los pixeles mas oscuros (mas lejanos, segun la convencion del modelo) marcan hacia donde
+// converge la perspectiva -- por ejemplo el fondo de una calle o un pasillo. Se calcula como
+// el centroide ponderado del percentil mas lejano de pixeles (mas lejos = mas peso), en vez
+// de solo el pixel minimo, para que no dependa de un unico pixel de ruido.
+function estimateVanishingPoint() {
+  const total = depthW * depthH;
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < depthData.length; i += 4) hist[depthData[i]]++;
+
+  let cum = 0, threshold = 255;
+  const target = total * VP_DARK_PERCENTILE;
+  for (let v = 0; v < 256; v++) {
+    cum += hist[v];
+    if (cum >= target) { threshold = v; break; }
+  }
+
+  let sumX = 0, sumY = 0, sumW = 0;
+  for (let y = 0; y < depthH; y++) {
+    for (let x = 0; x < depthW; x++) {
+      const v = depthData[(y * depthW + x) * 4];
+      if (v <= threshold) {
+        const w = threshold - v + 1; // mas oscuro (mas lejos) pesa mas
+        sumX += x * w;
+        sumY += y * w;
+        sumW += w;
+      }
+    }
+  }
+  if (sumW === 0) return { x: depthW / 2, y: depthH / 2 };
+  return { x: sumX / sumW, y: sumY / sumW };
+}
+
+// Punto de fuga en coordenadas de la imagen mostrada (se recalcula al hacer resize).
+function vanishingPointDisplay() {
+  return {
+    x: (vanishingPoint.x / depthW) * drawW,
+    y: (vanishingPoint.y / depthH) * drawH,
+  };
 }
 
 // La imagen se ajusta al alto de la ventana (sin scroll), manteniendo aspect ratio.
@@ -153,51 +208,127 @@ function render() {
   } else {
     ctx.drawImage(img, 0, 0, drawW, drawH);
   }
+  if (toggleVP.checked) drawVanishingPointDebug();
   if (cube) drawCube(cube);
   updateHud();
 }
 
+// Marca el punto de fuga (arrastrable) y, si hay un cubo, una linea punteada hacia el --
+// ayuda a verificar/corregir visualmente la estimacion (y por lo tanto el giro del cubo).
+function drawVanishingPointDebug() {
+  const vp = vanishingPointDisplay();
+
+  if (cube) {
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cube.x, cube.y);
+    ctx.lineTo(vp.x, vp.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = '#ffffff';
+  ctx.fillStyle = '#3b82f6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(vp.x, vp.y, VP_HANDLE_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Convierte una coordenada de pantalla al espacio del mapa de profundidad y la guarda
+// como el nuevo punto de fuga.
+function setVanishingPointFromDisplay(x, y) {
+  vanishingPoint = {
+    x: (x / drawW) * depthW,
+    y: (y / drawH) * depthH,
+  };
+}
+
+function isNearVanishingPoint(x, y) {
+  const vp = vanishingPointDisplay();
+  return Math.hypot(x - vp.x, y - vp.y) <= VP_HANDLE_RADIUS + 6;
+}
+
 // Calcula los vertices visibles del cubo. (x,y) = centro de la arista inferior de la cara
 // frontal, es decir, el punto de apoyo en el suelo de la escena.
+//
+// La cara "trasera" recede hacia el punto de fuga de la escena en su direccion 2D real
+// (no solo horizontal): si el cubo queda a la derecha del punto de fuga gira hacia la
+// izquierda, a la izquierda gira hacia la derecha, y por encima/debajo tambien inclina
+// hacia abajo/arriba -- simulando perspectiva de 1 punto en cualquier direccion.
 function cubeVertices(c) {
   const s = c.size;
-  const skewX = s * CUBE_SKEW_X;
-  const skewY = s * CUBE_SKEW_Y;
+  const vp = vanishingPointDisplay();
+
+  const dx = vp.x - c.x;
+  const dy = vp.y - c.y;
+  const dist = Math.hypot(dx, dy) || 1; // evita division por cero si coinciden
+  const nx = dx / dist;
+  const ny = dy / dist;
+
+  const skewX = nx * s * CUBE_SKEW_MAG_X;
+  const skewY = ny * s * CUBE_SKEW_MAG_Y;
 
   const FBL = { x: c.x - s / 2, y: c.y };
   const FBR = { x: c.x + s / 2, y: c.y };
   const FTR = { x: c.x + s / 2, y: c.y - s };
   const FTL = { x: c.x - s / 2, y: c.y - s };
 
-  const back = (p) => ({ x: p.x + skewX, y: p.y - skewY });
+  const back = (p) => ({ x: p.x + skewX, y: p.y + skewY });
   const TTR = back(FTR);
   const TTL = back(FTL);
   const RBR = back(FBR);
+  const RBL = back(FBL);
 
-  return { FBL, FBR, FTR, FTL, TTR, TTL, RBR, skewX, skewY };
+  return { FBL, FBR, FTR, FTL, TTR, TTL, RBR, RBL, skewX, skewY };
 }
 
 function drawCube(c) {
   const v = cubeVertices(c);
 
-  // cara superior (arriba/abajo)
+  // cara superior/inferior (arriba/abajo). Segun hacia donde recede el cubo (signo de
+  // skewY), la cara realmente visible es la de arriba o la de abajo -- si el punto de
+  // fuga queda por encima del cubo se ve la cara de arriba (como antes); si queda por
+  // debajo (el cubo esta mas arriba que el punto de fuga), se ve la de abajo.
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
-  ctx.moveTo(v.FTL.x, v.FTL.y);
-  ctx.lineTo(v.FTR.x, v.FTR.y);
-  ctx.lineTo(v.TTR.x, v.TTR.y);
-  ctx.lineTo(v.TTL.x, v.TTL.y);
+  if (v.skewY <= 0) {
+    ctx.moveTo(v.FTL.x, v.FTL.y);
+    ctx.lineTo(v.FTR.x, v.FTR.y);
+    ctx.lineTo(v.TTR.x, v.TTR.y);
+    ctx.lineTo(v.TTL.x, v.TTL.y);
+  } else {
+    ctx.moveTo(v.FBL.x, v.FBL.y);
+    ctx.lineTo(v.FBR.x, v.FBR.y);
+    ctx.lineTo(v.RBR.x, v.RBR.y);
+    ctx.lineTo(v.RBL.x, v.RBL.y);
+  }
   ctx.closePath();
   ctx.fillStyle = COLOR_TOP_BOTTOM;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.stroke();
 
-  // cara derecha (izquierda/derecha)
+  // cara lateral (izquierda/derecha). Segun hacia donde recede el cubo (signo de skewX),
+  // la cara realmente visible es la derecha o la izquierda -- la otra queda detras de la
+  // cara frontal y no se dibuja (evita que quede tapada/recortada de forma rara).
   ctx.beginPath();
-  ctx.moveTo(v.FBR.x, v.FBR.y);
-  ctx.lineTo(v.FTR.x, v.FTR.y);
-  ctx.lineTo(v.TTR.x, v.TTR.y);
-  ctx.lineTo(v.RBR.x, v.RBR.y);
+  if (v.skewX >= 0) {
+    ctx.moveTo(v.FBR.x, v.FBR.y);
+    ctx.lineTo(v.FTR.x, v.FTR.y);
+    ctx.lineTo(v.TTR.x, v.TTR.y);
+    ctx.lineTo(v.RBR.x, v.RBR.y);
+  } else {
+    ctx.moveTo(v.FBL.x, v.FBL.y);
+    ctx.lineTo(v.FTL.x, v.FTL.y);
+    ctx.lineTo(v.TTL.x, v.TTL.y);
+    ctx.lineTo(v.RBL.x, v.RBL.y);
+  }
   ctx.closePath();
   ctx.fillStyle = COLOR_LEFT_RIGHT;
   ctx.fill();
@@ -220,11 +351,13 @@ function updateHud() {
     hud.textContent = 'click / arrastra para colocar el cubo';
     return;
   }
+  const vp = vanishingPointDisplay();
   hud.textContent =
     `x: ${cube.x.toFixed(0)}  y: ${cube.y.toFixed(0)} (cara inferior)\n` +
     `depth (raw 0-255): ${cube.depth.toFixed(1)}\n` +
     `size: ${cube.size.toFixed(1)} px\n` +
-    `depth range: ${DEPTH_MIN} .. ${DEPTH_MAX}`;
+    `depth range: ${DEPTH_MIN} .. ${DEPTH_MAX}\n` +
+    `punto de fuga: (${vp.x.toFixed(0)}, ${vp.y.toFixed(0)})`;
 }
 
 function getCanvasCoords(evt) {
@@ -236,7 +369,7 @@ function getCanvasCoords(evt) {
 function isNearCube(x, y) {
   if (!cube) return false;
   const v = cubeVertices(cube);
-  const pts = [v.FBL, v.FBR, v.FTR, v.FTL, v.TTR, v.TTL, v.RBR];
+  const pts = [v.FBL, v.FBR, v.FTR, v.FTL, v.TTR, v.TTL, v.RBR, v.RBL];
   const minX = Math.min(...pts.map(p => p.x));
   const maxX = Math.max(...pts.map(p => p.x));
   const minY = Math.min(...pts.map(p => p.y));
@@ -246,6 +379,13 @@ function isNearCube(x, y) {
 
 canvas.addEventListener('mousedown', (evt) => {
   const { x, y } = getCanvasCoords(evt);
+
+  if (toggleVP.checked && isNearVanishingPoint(x, y)) {
+    draggingVP = true;
+    render();
+    return;
+  }
+
   if (!isNearCube(x, y)) {
     placeOrMoveCube(x, y);
   }
@@ -254,21 +394,30 @@ canvas.addEventListener('mousedown', (evt) => {
 });
 
 window.addEventListener('mousemove', (evt) => {
-  if (!dragging) return;
+  if (!dragging && !draggingVP) return;
   const { x, y } = getCanvasCoords(evt);
-  placeOrMoveCube(x, y);
+  if (draggingVP) {
+    setVanishingPointFromDisplay(x, y);
+  } else {
+    placeOrMoveCube(x, y);
+  }
   render();
 });
 
 window.addEventListener('mouseup', () => {
   dragging = false;
+  draggingVP = false;
 });
 
 toggleDepth.addEventListener('change', render);
+toggleVP.addEventListener('change', render);
 
 window.addEventListener('keydown', (evt) => {
   if (evt.key === 'd' || evt.key === 'D') {
     toggleDepth.checked = !toggleDepth.checked;
+    render();
+  } else if (evt.key === 'v' || evt.key === 'V') {
+    toggleVP.checked = !toggleVP.checked;
     render();
   }
 });

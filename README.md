@@ -56,14 +56,47 @@ reescalar/transformar coordenadas.
 
 ## Cubo
 
-Proyección isométrica simple con 3 caras visibles (arriba, frente, derecha).
-Cada cara comparte color con su opuesta no visible:
+Proyección simple con 3 caras visibles (arriba, frente, derecha). Cada cara
+comparte color con su opuesta no visible:
 
 - arriba / abajo → azul
 - frente / atrás → rojo
 - izquierda / derecha → verde
 
-`CUBE_SKEW_X` / `CUBE_SKEW_Y` controlan el ángulo de la perspectiva.
+### Orientación según el punto de fuga
+
+El cubo no usa un ángulo de perspectiva fijo: se orienta hacia el **punto de
+fuga** estimado de la escena, igual que la técnica de perspectiva de 1 punto
+que usan los ilustradores.
+
+- **Estimación del punto de fuga**: se toma el percentil más oscuro (más
+  lejano, según la convención del modelo) de píxeles del mapa de profundidad
+  — `VP_DARK_PERCENTILE`, 5% por defecto — y se calcula su centroide
+  ponderado (los píxeles más lejanos pesan más). En una escena con un pasillo,
+  calle o corredor, esto cae naturalmente cerca de donde convergen las líneas
+  de fuga (el fondo de la escena). Se calcula una sola vez al cargar, en
+  `estimateVanishingPoint()`.
+- **Orientación del cubo**: la cara "trasera" (la que representa la
+  profundidad "hacia adentro") recede en la dirección 2D real hacia el punto
+  de fuga — no solo horizontal. Si el cubo está a la derecha del punto de
+  fuga gira hacia la izquierda, a la izquierda gira hacia la derecha, y si
+  el cubo queda por encima o por debajo del punto de fuga, inclina hacia
+  abajo o hacia arriba respectivamente. `cubeVertices()` calcula el vector
+  unitario cubo→punto de fuga y elige, en `drawCube()`, cuál de las dos caras
+  de cada par opuesto (arriba/abajo, izquierda/derecha) es la que realmente
+  queda visible según el signo de cada componente — la otra queda oculta
+  detrás de la cara frontal. `CUBE_SKEW_MAG_X` / `CUBE_SKEW_MAG_Y` controlan
+  cuánto se estira esa cara trasera en cada eje.
+- Checkbox/tecla `V` muestra el punto de fuga estimado (círculo + línea
+  punteada hacia el cubo). El círculo se puede **arrastrar** para corregir la
+  estimación a mano cuando no cae donde debería.
+
+Es una aproximación de perspectiva de 1 punto (un único punto de fuga global),
+no una reconstrucción de cámara real — no tenemos intrínsecos ni un plano de
+suelo calibrado, solo el mapa de profundidad relativo del modelo. Funciona
+razonablemente bien en escenas con una dirección de perspectiva dominante
+(calles, pasillos); en escenas sin eso, el punto de fuga estimado puede no
+significar mucho.
 
 ## Pendiente / ideas descartadas por ahora
 
